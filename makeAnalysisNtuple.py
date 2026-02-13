@@ -3,10 +3,9 @@ import numpy as np
 import sys
 import os
 from array import array
-
-# Use English for comments in the code.
-
+import glob
 import math
+import argparse
 
 def deltaR(eta1, phi1, eta2, phi2):
     dphi = phi1 - phi2
@@ -87,20 +86,55 @@ def calculate_reconstruction(p_vis, e_vis, sv, pv):
         'e_full': e_vis + p_nu
     }
 
-def analyze_and_save(input_file, output_file):
-    if not os.path.exists(input_file):
-        print("Error: {0} not found.".format(input_file))
+def analyze_and_save(input_path, output_file):
+
+# --- 1. Identify Input Files ---
+    input_files = []
+    
+    if os.path.isdir(input_path):
+        input_files = glob.glob(os.path.join(input_path, "*.root"))
+    else:
+        input_files = glob.glob(input_path)
+
+    if not input_files:
+        print("Error: No ROOT files found for input: {0}".format(input_path))
         return
 
-    total_sumw = get_genEventSumw(input_file)
-    print("Opening input: {0} (Total SumW: {1})".format(input_file, total_sumw))
-        
-    f_in = ROOT.TFile.Open(input_file)
-    tree = f_in.Get("Events")
-    total_entries = tree.GetEntries()
+    # --- 2. Setup TChain ---
+    chain = ROOT.TChain("Events")
+    for f in input_files:
+        print("Adding to chain: {0}".format(f))
+        chain.Add(f)
+    
+    total_entries = chain.GetEntries()
+
+    # --- 3. SumW calculation (from all matched files) ---
+    total_sumw = 0
+    for f_path in input_files:
+        total_sumw += get_genEventSumw(f_path)
+    
+    print("\nTotal Files: {0}, Total Entries: {1}, Total SumW: {2}".format(
+        len(input_files), total_entries, total_sumw))
+
+
 
     f_out = ROOT.TFile(output_file, "RECREATE")
     new_tree = ROOT.TTree("tree", "BsTauTau_Full_Reconstruction")
+
+
+#    if not os.path.exists(input_file):
+#        print("Error: {0} not found.".format(input_file))
+#        return
+#
+#    total_sumw = get_genEventSumw(input_file)
+#    print("Opening input: {0} (Total SumW: {1})".format(input_file, total_sumw))
+#        
+#    f_in = ROOT.TFile.Open(input_file)
+#    tree = f_in.Get("Events")
+#    total_entries = tree.GetEntries()
+#
+#    f_out = ROOT.TFile(output_file, "RECREATE")
+#    new_tree = ROOT.TTree("tree", "BsTauTau_Full_Reconstruction")
 
     # --- Setup Buffers ---
     m_vis, m_exact = array('f', [0.0]), array('f', [0.0])
@@ -111,6 +145,10 @@ def analyze_and_save(input_file, output_file):
     tau1_m_rho, tau2_m_rho = array('f', [0.0]), array('f', [0.0])
     is_true_signal = array('i', [0])
     puWeight, L1PreFiringWeight_Nom, genWeight = array('f', [1.0]), array('f', [1.0]), array('f', [1.0])
+    mu1_pt, mu1_eta = array('f',[-1.0]), array('f',[-1.0])
+    nj, nbj = array('i',[-1]), array('i',[-1])
+    PuppiMET_pt = array('f',[-1.0])
+    
 
     new_tree.Branch("m_vis", m_vis, "m_vis/F")
     new_tree.Branch("m_exact", m_exact, "m_exact/F")
@@ -128,6 +166,11 @@ def analyze_and_save(input_file, output_file):
     new_tree.Branch("puWeight", puWeight, "puWeight/F")
     new_tree.Branch("L1PreFiringWeight_Nom", L1PreFiringWeight_Nom, "L1PreFiringWeight_Nom/F")
     new_tree.Branch("genWeight", genWeight, "genWeight/F")
+    new_tree.Branch("mu1_pt", mu1_pt, "mu1_pt/F")
+    new_tree.Branch("mu1_eta", mu1_eta, "mu1_eta/F")
+    new_tree.Branch("nj", nj, "nj/I")
+    new_tree.Branch("nbj", nbj, "nbj/I")
+    new_tree.Branch("PuppiMET_pt", PuppiMET_pt, "PuppiMET_pt/F")
 
     outputs = {}
     for prefix in ["tau1_", "tau2_"]:
@@ -151,20 +194,21 @@ def analyze_and_save(input_file, output_file):
 
     # --- Processing ---
     for i in range(total_entries):
-        tree.GetEntry(i)
+#        tree.GetEntry(i)
+        chain.GetEntry(i)
         if i % 10000 == 0:
             sys.stdout.write("\rProgress: {0:.1f}%".format(100.0 * i / total_entries))
             sys.stdout.flush()
 
-        if len(tree.BsTau_pt) < 2: continue
+        if len(chain.BsTau_pt) < 2: continue
 
         
         # Group tau candidates by jet using original rounding logic
         taus_by_jet = {}
-        for it in range(len(tree.BsTau_pt)):
-            if tree.BsTau_jetPt[it] < 0: continue
+        for it in range(len(chain.BsTau_pt)):
+            if chain.BsTau_jetPt[it] < 0: continue
             # Use jet kinematics as key to identify tau candidates belonging to the same jet
-            key = (round(tree.BsTau_jetPt[it], 3), round(tree.BsTau_jetEta[it], 3))
+            key = (round(chain.BsTau_jetPt[it], 3), round(chain.BsTau_jetEta[it], 3))
             if key not in taus_by_jet: taus_by_jet[key] = []
             taus_by_jet[key].append(it)
 
@@ -173,25 +217,22 @@ def analyze_and_save(input_file, output_file):
 #	    print("check", key, indices, len(indices))
 
             if len(indices) < 2: continue
- 
-            # Sort by vertex probability (descending)           
- 	    indices_sorted = sorted(indices, key=lambda idx: tree.BsTau_vtxProb[idx], reverse=True)
+            indices_sorted = sorted(indices, key=lambda idx: chain.BsTau_vtxProb[idx], reverse=True)
             
-#	    print("sorted_indices:", indices_sorted)
-
+            # Sort by vertex probability (descending)           
+            
             i1, i2, found_pair = -1, -1, False
             for idx_a in range(len(indices_sorted)):
                 for idx_b in range(idx_a + 1, len(indices_sorted)):
                     ia, ib = indices_sorted[idx_a], indices_sorted[idx_b]
                     
                     # Check for track overlap using trkIdx
-                    t1 = {tree.BsTau_trkIdx1[ia], tree.BsTau_trkIdx2[ia], tree.BsTau_trkIdx3[ia]}
-                    t2 = {tree.BsTau_trkIdx1[ib], tree.BsTau_trkIdx2[ib], tree.BsTau_trkIdx3[ib]}
-                   
-#		    print("This is check:", t1, t2, tree.BsTau_charge[ia], tree.BsTau_charge[ib], t1.isdisjoint(t2))
+                    t1 = {chain.BsTau_trkIdx1[ia], chain.BsTau_trkIdx2[ia], chain.BsTau_trkIdx3[ia]}
+                    t2 = {chain.BsTau_trkIdx1[ib], chain.BsTau_trkIdx2[ib], chain.BsTau_trkIdx3[ib]}
+#                    print("This is check:", t1, t2, chain.BsTau_charge[ia], chain.BsTau_charge[ib])
  
                     # OS charge requirement and ensure no shared tracks
-                    if t1.isdisjoint(t2) and int(tree.BsTau_charge[ia] + tree.BsTau_charge[ib]) == 0:
+                    if t1.isdisjoint(t2) and int(chain.BsTau_charge[ia] + chain.BsTau_charge[ib]) == 0:
                         i1, i2, found_pair = ia, ib, True
 #                        print('pair found!')
                         break
@@ -203,11 +244,11 @@ def analyze_and_save(input_file, output_file):
 
             # Match jet branch index for the selected tau pair
             matched_j_idx = -1
-            for j_idx in range(len(tree.j_pt)):
+            for j_idx in range(len(chain.j_pt)):
 
-                dr = deltaR(tree.j_eta[j_idx], tree.j_phi[j_idx], tree.BsTau_jetEta[i1], tree.BsTau_jetPhi[i1])
+                dr = deltaR(chain.j_eta[j_idx], chain.j_phi[j_idx], chain.BsTau_jetEta[i1], chain.BsTau_jetPhi[i1])
                 if dr < 0.1:
-#                if abs(tree.j_pt[j_idx] - tree.BsTau_jetPt[i1]) < 0.01 and abs(tree.j_eta[j_idx] - tree.BsTau_jetEta[i1]) < 0.01:
+#                if abs(chain.j_pt[j_idx] - chain.BsTau_jetPt[i1]) < 0.01 and abs(chain.j_eta[j_idx] - chain.BsTau_jetEta[i1]) < 0.01:
                     matched_j_idx = j_idx; break
             if matched_j_idx == -1: 
                 print('no matching jet found ...')
@@ -215,7 +256,7 @@ def analyze_and_save(input_file, output_file):
 
             # Kinematic reconstruction for tau1 and tau2
             def get_kin_full(it):
-                pt, eta, phi, m = tree.BsTau_pt[it], tree.BsTau_eta[it], tree.BsTau_phi[it], tree.BsTau_mass[it]
+                pt, eta, phi, m = chain.BsTau_pt[it], chain.BsTau_eta[it], chain.BsTau_phi[it], chain.BsTau_mass[it]
                 px, py, pz = pt*np.cos(phi), pt*np.sin(phi), pt*np.sinh(eta)
                 e = np.sqrt(px**2 + py**2 + pz**2 + m**2)
                 
@@ -224,10 +265,10 @@ def analyze_and_save(input_file, output_file):
                 pions = []
                 for idx in [1, 2, 3]:
                     p = ROOT.TLorentzVector()
-                    p.SetPtEtaPhiM(getattr(tree, "BsTau_pion{0}_pt".format(idx))[it], 
-                                  getattr(tree, "BsTau_pion{0}_eta".format(idx))[it], 
-                                  getattr(tree, "BsTau_pion{0}_phi".format(idx))[it], 0.13957)
-                    pions.append({'p': p, 'q': getattr(tree, "BsTau_pion{0}_charge".format(idx))[it]})
+                    p.SetPtEtaPhiM(getattr(chain, "BsTau_pion{0}_pt".format(idx))[it], 
+                                  getattr(chain, "BsTau_pion{0}_eta".format(idx))[it], 
+                                  getattr(chain, "BsTau_pion{0}_phi".format(idx))[it], 0.13957)
+                    pions.append({'p': p, 'q': getattr(chain, "BsTau_pion{0}_charge".format(idx))[it]})
                 
                 for a in range(3):
                     for b in range(a+1, 3):
@@ -237,8 +278,8 @@ def analyze_and_save(input_file, output_file):
                                 min_diff, m_rho_best = abs(m_rho_cand - 0.770), m_rho_cand
                 
                 res = calculate_reconstruction({'px':px, 'py':py, 'pz':pz}, e, 
-                                              {'x':tree.BsTau_svX[it], 'y':tree.BsTau_svY[it], 'z':tree.BsTau_svZ[it]}, 
-                                              {'x':tree.BsTau_pvX[it], 'y':tree.BsTau_pvY[it], 'z':tree.BsTau_pvZ[it]})
+                                              {'x':chain.BsTau_svX[it], 'y':chain.BsTau_svY[it], 'z':chain.BsTau_svZ[it]}, 
+                                              {'x':chain.BsTau_pvX[it], 'y':chain.BsTau_pvY[it], 'z':chain.BsTau_pvZ[it]})
                 return res, px, py, pz, e, eta, phi, m_rho_best
 
 
@@ -249,10 +290,15 @@ def analyze_and_save(input_file, output_file):
 
 #            print("this is good event2")
             # Fill event weights
-            genWeight[0] = float(getattr(tree, "genWeight", 1.0))
-            puWeight[0] = float(getattr(tree, "puWeight", 1.0))
-            L1PreFiringWeight_Nom[0] = float(getattr(tree, "L1PreFiringWeight_Nom", 1.0))
-            
+            genWeight[0] = float(getattr(chain, "genWeight", 1.0))
+            puWeight[0] = float(getattr(chain, "puWeight", 1.0))
+            L1PreFiringWeight_Nom[0] = float(getattr(chain, "L1PreFiringWeight_Nom", 1.0))
+            mu1_pt[0] = float(getattr(chain, "mu1_pt", -1.0))
+            mu1_eta[0] = float(getattr(chain, "mu1_eta", -1.0))
+            nj[0] = int(getattr(chain, "nj", -1.0))
+            nbj[0] = int(getattr(chain, "nbj", -1.0))
+            PuppiMET_pt[0] = float(getattr(chain, "PuppiMET_pt", -1.0))
+
             # Visible and Rho mass
             tau1_m_rho[0], tau2_m_rho[0] = float(rho1), float(rho2)
             x1[0], x2[0] = float(res1['x']), float(res2['x'])
@@ -272,33 +318,36 @@ def analyze_and_save(input_file, output_file):
                 m_exact[0] = -1.0; pair_pt[0] = -1.0; pair_eta[0] = 0.0; pair_phi[0] = 0.0
 
             # Isolation and geometry
-            selected_trks = {tree.BsTau_trkIdx1[i1], tree.BsTau_trkIdx2[i1], tree.BsTau_trkIdx3[i1], 
-                             tree.BsTau_trkIdx1[i2], tree.BsTau_trkIdx2[i2], tree.BsTau_trkIdx3[i2]}
+            selected_trks = {chain.BsTau_trkIdx1[i1], chain.BsTau_trkIdx2[i1], chain.BsTau_trkIdx3[i1], 
+                             chain.BsTau_trkIdx1[i2], chain.BsTau_trkIdx2[i2], chain.BsTau_trkIdx3[i2]}
             # Count total tracks in jet minus the 6 tracks belonging to the tau pair
             all_tau_trks = set()
             for idx in indices:
-                all_tau_trks.update([tree.BsTau_trkIdx1[idx], tree.BsTau_trkIdx2[idx], tree.BsTau_trkIdx3[idx]])
+                all_tau_trks.update([chain.BsTau_trkIdx1[idx], chain.BsTau_trkIdx2[idx], chain.BsTau_trkIdx3[idx]])
             n_extra_trks[0] = int(len(all_tau_trks - selected_trks))
             
-            iso_ratio[0] = float(np.sqrt((px1+px2)**2 + (py1+py2)**2) / tree.j_pt[matched_j_idx])
+            #            iso_ratio[0] = float(np.sqrt((px1+px2)**2 + (py1+py2)**2) / chain.j_pt[matched_j_idx])
+#            print('jet1, jet2=', chain.BsTau_jetPt[i1], chain.BsTau_jetPt[i2])
+            iso_ratio[0] = float(np.sqrt((px1+px2)**2 + (py1+py2)**2) / chain.BsTau_jetPt[i1])
+
             dr_taus[0] = float(np.sqrt((eta1 - eta2)**2 + (ROOT.TVector2.Phi_mpi_pi(phi1 - phi2))**2))
-            is_true_signal[0] = int(1 if (tree.BsTau_isFromBsTau[i1] and tree.BsTau_isFromBsTau[i2]) else 0)
+            is_true_signal[0] = int(1 if (chain.BsTau_isFromBsTau[i1] and chain.BsTau_isFromBsTau[i2]) else 0)
 
             # Store individual tau data
             for p, idx in [("tau1_", i1), ("tau2_", i2)]:
-                dx, dy, dz = tree.BsTau_pvX[idx]-tree.BsTau_svX[idx], tree.BsTau_pvY[idx]-tree.BsTau_svY[idx], tree.BsTau_pvZ[idx]-tree.BsTau_svZ[idx]
+                dx, dy, dz = chain.BsTau_pvX[idx]-chain.BsTau_svX[idx], chain.BsTau_pvY[idx]-chain.BsTau_svY[idx], chain.BsTau_pvZ[idx]-chain.BsTau_svZ[idx]
                 outputs[p+"deltaPV_dr"][0] = float(np.sqrt(dx**2 + dy**2 + dz**2))
                 
                 for name, type_char in TAU_CONFIG:
                     s = name.replace("BsTau_", "")
-                    val = getattr(tree, name)[idx]
+                    val = getattr(chain, name)[idx]
                     outputs[p+s][0] = int(val) if type_char == 'I' else float(val)
 
             # Fill jet-related branches
             for b in J_BRANCH_LIST:
                 val = -999.0
                 try:
-                    data = getattr(tree, b)
+                    data = getattr(chain, b)
                     target_idx = i1 if b.startswith("BsTau_jet") else matched_j_idx
                     if target_idx < len(data): val = data[target_idx]
                 except Exception: pass
@@ -312,10 +361,22 @@ def analyze_and_save(input_file, output_file):
     h_sumw.Write()
     f_out.Write()
     f_out.Close()
-    f_in.Close()
     print("\nProcessing completed successfully.")
 
 if __name__ == "__main__":
-    analyze_and_save("all_Skim.root", "sig_reco.root")
+
+
+    parser = argparse.ArgumentParser(description="Process ROOT files.")
+    parser.add_argument("-i", "--input", required=True, 
+                        help="Input path: can be a directory, a single file, or a wildcard (e.g. 'data/*.root')")
+    parser.add_argument("-o", "--output", required=True, 
+                        help="Output file absolute path")
+
+  
+    args = parser.parse_args()
+    
+    analyze_and_save(args.input, args.output)
+    
+#    analyze_and_save("all_Skim.root", "sig_reco.root")
 
 
