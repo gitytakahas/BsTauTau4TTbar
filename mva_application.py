@@ -13,8 +13,9 @@ TREE_NAME = "tree"
 # List of input and output files
 # Format: (input_file, output_file)
 FILES_TO_PROCESS = [
-    ("final_bstautau_vtx.root",  "applied_final_bstautau_vtx.root"),
-    ("final_ttsemileptonic_vtx.root",  "applied_final_ttsemileptonic_vtx.root"),
+#    ("final_bstautau_vtx.root",  "applied_final_bstautau_vtx.root"),
+#    ("final_ttsemileptonic_vtx.root",  "applied_final_ttsemileptonic_vtx.root"),
+    ("sig_reco.root",  "applied_sig_reco.root"),
 
     # Add more files as needed
 ]

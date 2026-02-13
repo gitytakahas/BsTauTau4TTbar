@@ -200,9 +200,9 @@ def train(sig_file, bkg_file, n_sig=-1, n_bkg=-1):
     print("Model saved as bs_tautau_xgb_model.bin")
 
 if __name__ == "__main__":
-    SIGNAL_FILE = "signalOnl.root"
-#    SIGNAL_FILE = "test_bstautau_vtx.root"
-    BKG_FILE = "test_bstautau_vtx.root"
+#    SIGNAL_FILE = "signalOnl.root"
+    SIGNAL_FILE = "sig_reco.root"
+    BKG_FILE = "sig_reco.root"
     
     # -1 means use all events
     train(SIGNAL_FILE, BKG_FILE, n_sig=-1, n_bkg=-1)

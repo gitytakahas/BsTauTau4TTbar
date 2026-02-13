@@ -6,6 +6,15 @@ from array import array
 
 # Use English for comments in the code.
 
+import math
+
+def deltaR(eta1, phi1, eta2, phi2):
+    dphi = phi1 - phi2
+    while dphi >  math.pi: dphi -= 2*math.pi
+    while dphi < -math.pi: dphi += 2*math.pi
+    return math.sqrt((eta1 - eta2)**2 + dphi**2)
+
+
 # --- 1. Configuration ---
 TAU_CONFIG = [
     ("BsTau_pt", 'F'), ("BsTau_eta", 'F'), ("BsTau_phi", 'F'),
@@ -14,12 +23,19 @@ TAU_CONFIG = [
     ("BsTau_pion1_pt", 'F'), ("BsTau_pion2_pt", 'F'), ("BsTau_pion3_pt", 'F'),
     ("BsTau_pion1_eta", 'F'), ("BsTau_pion2_eta", 'F'), ("BsTau_pion3_eta", 'F'),
     ("BsTau_pion1_phi", 'F'), ("BsTau_pion2_phi", 'F'), ("BsTau_pion3_phi", 'F'),
-    ("BsTau_vtxProb", 'F'), ("BsTau_flightLen", 'F'), ("BsTau_lxySig", 'F'),
+    ("BsTau_vtxProb", 'F'), ("BsTau_flightLen", 'F'), ("BsTau_lxySig", 'F'), 
     ("BsTau_nExtra", 'I'), ("BsTau_mass", 'F'),
     ("BsTau_genMatchId", 'I'), 
     ("BsTau_isFromBsTau", 'I'),
     ("BsTau_charge", 'I'),
+    ("BsTau_fitMass", 'F'),
+    ("BsTau_fitPt", 'F'),
+    ("BsTau_maxDoca", 'F'),
+    ("BsTau_minDoca", 'F'),
+    ("BsTau_pvips", 'F'),
+    ("BsTau_deltaChi2", 'F'),
 ]
+
 
 J_BRANCH_LIST = [
     "j_ParTRawB", "j_ParTRawC", "j_ParTRawOther", 
@@ -115,7 +131,6 @@ def analyze_and_save(input_file, output_file):
 
     outputs = {}
     for prefix in ["tau1_", "tau2_"]:
-        # Flight distance 3D distance branch
         v = "{0}deltaPV_dr".format(prefix)
         outputs[v] = array('f', [0.0])
         new_tree.Branch(v, outputs[v], "{0}/F".format(v))
@@ -142,53 +157,69 @@ def analyze_and_save(input_file, output_file):
             sys.stdout.flush()
 
         if len(tree.BsTau_pt) < 2: continue
+
         
-        # Group tau candidates by jet
+        # Group tau candidates by jet using original rounding logic
         taus_by_jet = {}
         for it in range(len(tree.BsTau_pt)):
             if tree.BsTau_jetPt[it] < 0: continue
-            # Using jet pt/eta as key for grouping
+            # Use jet kinematics as key to identify tau candidates belonging to the same jet
             key = (round(tree.BsTau_jetPt[it], 3), round(tree.BsTau_jetEta[it], 3))
             if key not in taus_by_jet: taus_by_jet[key] = []
             taus_by_jet[key].append(it)
 
+        # Pair building within each jet
         for key, indices in taus_by_jet.items():
+#	    print("check", key, indices, len(indices))
+
             if len(indices) < 2: continue
+ 
+            # Sort by vertex probability (descending)           
+ 	    indices_sorted = sorted(indices, key=lambda idx: tree.BsTau_vtxProb[idx], reverse=True)
             
-            # Sort by vertex probability (descending)
-            indices_sorted = sorted(indices, key=lambda idx: tree.BsTau_vtxProb[idx], reverse=True)
-            
+#	    print("sorted_indices:", indices_sorted)
+
             i1, i2, found_pair = -1, -1, False
             for idx_a in range(len(indices_sorted)):
                 for idx_b in range(idx_a + 1, len(indices_sorted)):
                     ia, ib = indices_sorted[idx_a], indices_sorted[idx_b]
                     
-                    # Track overlap check
+                    # Check for track overlap using trkIdx
                     t1 = {tree.BsTau_trkIdx1[ia], tree.BsTau_trkIdx2[ia], tree.BsTau_trkIdx3[ia]}
                     t2 = {tree.BsTau_trkIdx1[ib], tree.BsTau_trkIdx2[ib], tree.BsTau_trkIdx3[ib]}
-                    
-                    # OS charge check and disjoint tracks
+                   
+#		    print("This is check:", t1, t2, tree.BsTau_charge[ia], tree.BsTau_charge[ib], t1.isdisjoint(t2))
+ 
+                    # OS charge requirement and ensure no shared tracks
                     if t1.isdisjoint(t2) and int(tree.BsTau_charge[ia] + tree.BsTau_charge[ib]) == 0:
                         i1, i2, found_pair = ia, ib, True
+#                        print('pair found!')
                         break
                 if found_pair: break
             
             if not found_pair: continue
+	
+#	    print("pair found !!!!!!!!!!!!!!!!")
 
-            # Match jet branch index
+            # Match jet branch index for the selected tau pair
             matched_j_idx = -1
             for j_idx in range(len(tree.j_pt)):
-                if abs(tree.j_pt[j_idx] - tree.BsTau_jetPt[i1]) < 0.01 and abs(tree.j_eta[j_idx] - tree.BsTau_jetEta[i1]) < 0.01:
-                    matched_j_idx = j_idx; break
-            if matched_j_idx == -1: continue
 
-            # Kinematic reconstruction function
+                dr = deltaR(tree.j_eta[j_idx], tree.j_phi[j_idx], tree.BsTau_jetEta[i1], tree.BsTau_jetPhi[i1])
+                if dr < 0.1:
+#                if abs(tree.j_pt[j_idx] - tree.BsTau_jetPt[i1]) < 0.01 and abs(tree.j_eta[j_idx] - tree.BsTau_jetEta[i1]) < 0.01:
+                    matched_j_idx = j_idx; break
+            if matched_j_idx == -1: 
+                print('no matching jet found ...')
+                continue
+
+            # Kinematic reconstruction for tau1 and tau2
             def get_kin_full(it):
                 pt, eta, phi, m = tree.BsTau_pt[it], tree.BsTau_eta[it], tree.BsTau_phi[it], tree.BsTau_mass[it]
                 px, py, pz = pt*np.cos(phi), pt*np.sin(phi), pt*np.sinh(eta)
                 e = np.sqrt(px**2 + py**2 + pz**2 + m**2)
                 
-                # m_rho calculation for the tau candidate
+                # Best m_rho candidate from 3 pions
                 m_rho_best, min_diff = -1.0, 999.0
                 pions = []
                 for idx in [1, 2, 3]:
@@ -206,26 +237,29 @@ def analyze_and_save(input_file, output_file):
                                 min_diff, m_rho_best = abs(m_rho_cand - 0.770), m_rho_cand
                 
                 res = calculate_reconstruction({'px':px, 'py':py, 'pz':pz}, e, 
-                                             {'x':tree.BsTau_svX[it], 'y':tree.BsTau_svY[it], 'z':tree.BsTau_svZ[it]}, 
-                                             {'x':tree.BsTau_pvX[it], 'y':tree.BsTau_pvY[it], 'z':tree.BsTau_pvZ[it]})
+                                              {'x':tree.BsTau_svX[it], 'y':tree.BsTau_svY[it], 'z':tree.BsTau_svZ[it]}, 
+                                              {'x':tree.BsTau_pvX[it], 'y':tree.BsTau_pvY[it], 'z':tree.BsTau_pvZ[it]})
                 return res, px, py, pz, e, eta, phi, m_rho_best
 
+
+#            print("this is good event")
             res1, px1, py1, pz1, e1, eta1, phi1, rho1 = get_kin_full(i1)
             res2, px2, py2, pz2, e2, eta2, phi2, rho2 = get_kin_full(i2)
             if not res1 or not res2: continue
 
-            # Fill weights
+#            print("this is good event2")
+            # Fill event weights
             genWeight[0] = float(getattr(tree, "genWeight", 1.0))
             puWeight[0] = float(getattr(tree, "puWeight", 1.0))
             L1PreFiringWeight_Nom[0] = float(getattr(tree, "L1PreFiringWeight_Nom", 1.0))
             
-            # Reco and visible mass
+            # Visible and Rho mass
             tau1_m_rho[0], tau2_m_rho[0] = float(rho1), float(rho2)
             x1[0], x2[0] = float(res1['x']), float(res2['x'])
             alpha1[0], alpha2[0] = float(res1['alpha']), float(res2['alpha'])
             m_vis[0] = float(np.sqrt(max(0, (e1+e2)**2 - ((px1+px2)**2 + (py1+py2)**2 + (pz1+pz2)**2))))
             
-            # Full mass reconstruction
+            # Full mass reconstruction (collinear approximation)
             if 0 < res1['x'] < 1 and 0 < res2['x'] < 1:
                 p_sum = res1['p_full'] + res2['p_full']
                 e_sum = res1['e_full'] + res2['e_full']
@@ -233,29 +267,26 @@ def analyze_and_save(input_file, output_file):
                 
                 v_pair = ROOT.TLorentzVector()
                 v_pair.SetPxPyPzE(p_sum[0], p_sum[1], p_sum[2], e_sum)
-                pair_pt[0] = float(v_pair.Pt())
-                pair_eta[0] = float(v_pair.Eta())
-                pair_phi[0] = float(v_pair.Phi())
+                pair_pt[0], pair_eta[0], pair_phi[0] = float(v_pair.Pt()), float(v_pair.Eta()), float(v_pair.Phi())
             else: 
                 m_exact[0] = -1.0; pair_pt[0] = -1.0; pair_eta[0] = 0.0; pair_phi[0] = 0.0
 
             # Isolation and geometry
+            selected_trks = {tree.BsTau_trkIdx1[i1], tree.BsTau_trkIdx2[i1], tree.BsTau_trkIdx3[i1], 
+                             tree.BsTau_trkIdx1[i2], tree.BsTau_trkIdx2[i2], tree.BsTau_trkIdx3[i2]}
+            # Count total tracks in jet minus the 6 tracks belonging to the tau pair
             all_tau_trks = set()
             for idx in indices:
                 all_tau_trks.update([tree.BsTau_trkIdx1[idx], tree.BsTau_trkIdx2[idx], tree.BsTau_trkIdx3[idx]])
-            selected_trks = {tree.BsTau_trkIdx1[i1], tree.BsTau_trkIdx2[i1], tree.BsTau_trkIdx3[i1], 
-                             tree.BsTau_trkIdx1[i2], tree.BsTau_trkIdx2[i2], tree.BsTau_trkIdx3[i2]}
             n_extra_trks[0] = int(len(all_tau_trks - selected_trks))
             
             iso_ratio[0] = float(np.sqrt((px1+px2)**2 + (py1+py2)**2) / tree.j_pt[matched_j_idx])
             dr_taus[0] = float(np.sqrt((eta1 - eta2)**2 + (ROOT.TVector2.Phi_mpi_pi(phi1 - phi2))**2))
             is_true_signal[0] = int(1 if (tree.BsTau_isFromBsTau[i1] and tree.BsTau_isFromBsTau[i2]) else 0)
 
-            # Store tau candidate data and calculate deltaPV_dr
+            # Store individual tau data
             for p, idx in [("tau1_", i1), ("tau2_", i2)]:
-                dx = tree.BsTau_pvX[idx] - tree.BsTau_svX[idx]
-                dy = tree.BsTau_pvY[idx] - tree.BsTau_svY[idx]
-                dz = tree.BsTau_pvZ[idx] - tree.BsTau_svZ[idx]
+                dx, dy, dz = tree.BsTau_pvX[idx]-tree.BsTau_svX[idx], tree.BsTau_pvY[idx]-tree.BsTau_svY[idx], tree.BsTau_pvZ[idx]-tree.BsTau_svZ[idx]
                 outputs[p+"deltaPV_dr"][0] = float(np.sqrt(dx**2 + dy**2 + dz**2))
                 
                 for name, type_char in TAU_CONFIG:
@@ -263,31 +294,28 @@ def analyze_and_save(input_file, output_file):
                     val = getattr(tree, name)[idx]
                     outputs[p+s][0] = int(val) if type_char == 'I' else float(val)
 
-            # Fill jet branches
+            # Fill jet-related branches
             for b in J_BRANCH_LIST:
                 val = -999.0
                 try:
                     data = getattr(tree, b)
                     target_idx = i1 if b.startswith("BsTau_jet") else matched_j_idx
                     if target_idx < len(data): val = data[target_idx]
-                except Exception: val = -999.0
+                except Exception: pass
                 outputs[b][0] = float(val if val is not None else -999.0)
 
             new_tree.Fill()
 
-    # Save genEventSumw for normalization
+    # Finalize files
     h_sumw = ROOT.TH1D("h_genEventSumw", "Total GenEventSumw", 1, 0, 1)
     h_sumw.SetBinContent(1, total_sumw)
     h_sumw.Write()
-
     f_out.Write()
     f_out.Close()
     f_in.Close()
     print("\nProcessing completed successfully.")
 
 if __name__ == "__main__":
-    # Provide the correct paths for your environment
-    analyze_and_save("test.root", "test_bstautau_vtx.root")
-    analyze_and_save("all_Skim_bstautau.root", "final_bstautau_vtx.root")
-    analyze_and_save("all_Skim_ttsemeleptonic.root", "final_ttsemileptonic_vtx.root")
+    analyze_and_save("all_Skim.root", "sig_reco.root")
+
 
