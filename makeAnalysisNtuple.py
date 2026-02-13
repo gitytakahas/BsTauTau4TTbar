@@ -1,3 +1,14 @@
+# directory 
+#python makeAnalysisNtuple.py -i /home/data/sample_dir -o /home/out/res.root
+
+# single file
+#python makeAnalysisNtuple.py -i /home/data/sample_dir/file_01.root -o /home/out/res.root
+
+# widecard
+#python makeAnalysisNtuple.py -i "/home/data/sample_dir/BSIG_*.root" -o /home/out/res.root
+
+
+
 import ROOT
 import numpy as np
 import sys
